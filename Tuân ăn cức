@@ -1,0 +1,351 @@
+-- Services
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+local Workspace = game:GetService("Workspace")
+local StarterGui = game:GetService("StarterGui")
+local TextChatService = game:GetService("TextChatService")
+
+local localPlayer = Players.LocalPlayer
+local camera = Workspace.CurrentCamera
+
+-- Cấu hình & trạng thái
+local ADMIN_PASS = "792015"
+local showExternalTargetAim = false
+local targetAimActive = false
+
+local showExternalFovAim = false
+local fovAimActive = false
+
+local teamCheckEnabled = false
+local wallCheckEnabled = false
+local showFovEnabled = true
+local fovRadius = 120
+local hasAdminAccess = false
+local isDraggingFov = false
+local selectedTargetPlayer = nil
+
+-- Parent GUI an toàn cho executor
+local function getGuiParent()
+	if gethui then
+		local ok, res = pcall(gethui)
+		if ok and res then return res end
+	end
+	local okCore, core = pcall(function() return CoreGui end)
+	if okCore and core then return core end
+	return localPlayer:WaitForChild("PlayerGui")
+end
+
+local guiParent = getGuiParent()
+
+if guiParent:FindFirstChild("TuanAnCucMenu") then
+	guiParent:FindFirstChild("TuanAnCucMenu"):Destroy()
+end
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "TuanAnCucMenu"
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.Parent = guiParent
+
+-- Vòng FOV
+local fovCircle = Drawing.new("Circle")
+fovCircle.Visible = false
+fovCircle.Radius = fovRadius
+fovCircle.Color = Color3.fromRGB(255, 80, 80)
+fovCircle.Thickness = 1.5
+fovCircle.Filled = false
+fovCircle.Transparency = 0.85
+fovCircle.Position = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+
+-- Định vị màu trắng ôm sát cơ thể + khoảng cách xuyên tường
+local espHighlight = Instance.new("Highlight")
+espHighlight.Name = "TargetWhiteEsp"
+espHighlight.FillColor = Color3.fromRGB(255, 255, 255)
+espHighlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+espHighlight.FillTransparency = 0.45
+espHighlight.OutlineTransparency = 0
+espHighlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+espHighlight.Enabled = false
+espHighlight.Parent = screenGui
+
+local espTagGui = Instance.new("BillboardGui")
+espTagGui.Name = "TargetDistanceTag"
+espTagGui.Size = UDim2.new(0, 170, 0, 38)
+espTagGui.StudsOffset = Vector3.new(0, 3.2, 0)
+espTagGui.AlwaysOnTop = true
+espTagGui.Enabled = false
+espTagGui.Parent = screenGui
+
+local espTagLabel = Instance.new("TextLabel")
+espTagLabel.Size = UDim2.new(1, 0, 1, 0)
+espTagLabel.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+espTagLabel.BackgroundTransparency = 0.25
+espTagLabel.Text = ""
+espTagLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+espTagLabel.Font = Enum.Font.GothamBold
+espTagLabel.TextSize = 11
+espTagLabel.TextWrapped = true
+espTagLabel.Parent = espTagGui
+Instance.new("UICorner", espTagLabel).CornerRadius = UDim.new(0, 5)
+
+-- Hai nút Aim nổi bên ngoài script
+local externalTargetAimBtn = Instance.new("TextButton")
+externalTargetAimBtn.Name = "ExternalTargetAimBtn"
+externalTargetAimBtn.Size = UDim2.new(0, 126, 0, 40)
+externalTargetAimBtn.Position = UDim2.new(0.75, 0, 0.20, 0)
+externalTargetAimBtn.BackgroundColor3 = Color3.fromRGB(175, 45, 55)
+externalTargetAimBtn.Text = "AIM CHỌN: OFF"
+externalTargetAimBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+externalTargetAimBtn.Font = Enum.Font.GothamBold
+externalTargetAimBtn.TextSize = 12
+externalTargetAimBtn.Active = true
+externalTargetAimBtn.Draggable = true
+externalTargetAimBtn.Visible = false
+externalTargetAimBtn.Parent = screenGui
+Instance.new("UICorner", externalTargetAimBtn).CornerRadius = UDim.new(0, 8)
+
+local externalFovAimBtn = Instance.new("TextButton")
+externalFovAimBtn.Name = "ExternalFovAimBtn"
+externalFovAimBtn.Size = UDim2.new(0, 126, 0, 40)
+externalFovAimBtn.Position = UDim2.new(0.75, 0, 0.30, 0)
+externalFovAimBtn.BackgroundColor3 = Color3.fromRGB(175, 45, 55)
+externalFovAimBtn.Text = "AIM FOV: OFF"
+externalFovAimBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+externalFovAimBtn.Font = Enum.Font.GothamBold
+externalFovAimBtn.TextSize = 12
+externalFovAimBtn.Active = true
+externalFovAimBtn.Draggable = true
+externalFovAimBtn.Visible = false
+externalFovAimBtn.Parent = screenGui
+Instance.new("UICorner", externalFovAimBtn).CornerRadius = UDim.new(0, 8)
+
+-- Nút mở lại menu khi thu gọn
+local reopenBtn = Instance.new("TextButton")
+reopenBtn.Name = "ReopenBtn"
+reopenBtn.Size = UDim2.new(0, 120, 0, 34)
+reopenBtn.Position = UDim2.new(0.02, 0, 0.12, 0)
+reopenBtn.BackgroundColor3
+-- 2. Menu chính: tuân ăn cức
+local mainFrame = Instance.new("Frame")
+mainFrame.Name = "MainFrame"
+mainFrame.Size = UDim2.new(0, 560, 0, 370)
+mainFrame.Position = UDim2.new(0.5, -280, 0.5, -185)
+mainFrame.BackgroundColor3 = Color3.fromRGB(20, 18, 26)
+mainFrame.BorderSizePixel = 0
+mainFrame.Active = true
+mainFrame.Draggable = true
+mainFrame.Visible = false
+mainFrame.Parent = screenGui
+Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 8)
+
+local topBar = Instance.new("Frame")
+topBar.Size = UDim2.new(1, 0, 0, 36)
+topBar.BackgroundColor3 = Color3.fromRGB(36, 32, 48)
+topBar.BorderSizePixel = 0
+topBar.Parent = mainFrame
+Instance.new("UICorner", topBar).CornerRadius = UDim.new(0, 8)
+
+local mainTitle = Instance.new("TextLabel")
+mainTitle.Size = UDim2.new(1, -45, 1, 0)
+mainTitle.Position = UDim2.new(0, 12, 0, 0)
+mainTitle.BackgroundTransparency = 1
+mainTitle.Text = "tuân ăn cức"
+mainTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+mainTitle.Font = Enum.Font.GothamBold
+mainTitle.TextSize = 14
+mainTitle.TextXAlignment = Enum.TextXAlignment.Left
+mainTitle.Parent = topBar
+
+local hideMainBtn = Instance.new("TextButton")
+hideMainBtn.Size = UDim2.new(0, 30, 0, 30)
+hideMainBtn.Position = UDim2.new(1, -33, 0, 3)
+hideMainBtn.BackgroundColor3 = Color3.fromRGB(190, 45, 55)
+hideMainBtn.Text = "X"
+hideMainBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+hideMainBtn.Font = Enum.Font.GothamBold
+hideMainBtn.TextSize = 12
+hideMainBtn.Parent = topBar
+Instance.new("UICorner", hideMainBtn).CornerRadius = UDim.new(0, 6)
+
+-- Cột trái: Các nút điều khiển Aim ngoài, Check, FOV và chọn người chơi
+local leftPanel = Instance.new("Frame")
+leftPanel.Size = UDim2.new(0.49, -14, 1, -46)
+leftPanel.Position = UDim2.new(0, 10, 0, 42)
+leftPanel.BackgroundColor3 = Color3.fromRGB(28, 25, 36)
+leftPanel.BorderSizePixel = 0
+leftPanel.Parent = mainFrame
+Instance.new("UICorner", leftPanel).CornerRadius = UDim.new(0, 6)
+
+local leftScroll = Instance.new("ScrollingFrame")
+leftScroll.Size = UDim2.new(1, -8, 1, -8)
+leftScroll.Position = UDim2.new(0, 4, 0, 4)
+leftScroll.BackgroundTransparency = 1
+leftScroll.BorderSizePixel = 0
+leftScroll.ScrollBarThickness = 3
+leftScroll.CanvasSize = UDim2.new(0, 0, 0, 500)
+leftScroll.Parent = leftPanel
+
+local leftLayout = Instance.new("UIListLayout")
+leftLayout.Padding = UDim.new(0, 6)
+leftLayout.SortOrder = Enum.SortOrder.LayoutOrder
+leftLayout.Parent = leftScroll
+
+local function makeListBtn(parent, height, text, bgColor)
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.new(1, -6, 0, height)
+	btn.BackgroundColor3 = bgColor or Color3.fromRGB(145, 45, 55)
+	btn.Text = text
+	btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	btn.Font = Enum.Font.GothamBold
+	btn.TextSize = 11
+	btn.Parent = parent
+	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 5)
+	return btn
+end
+
+local showTargetAimBtn = makeListBtn(leftScroll, 30, "Aim Người Chọn (Ngoài): OFF")
+local showFovAimBtn = makeListBtn(leftScroll, 30, "Aim Trong FOV (Ngoài): OFF")
+local teamBtn = makeListBtn(leftScroll, 30, "Team Check: OFF")
+local wallBtn = makeListBtn(leftScroll, 30, "Wall Check: OFF")
+local fovVisBtn = makeListBtn(leftScroll, 30, "FOV Circle: ON", Color3.fromRGB(45, 145, 75))
+
+-- Khung kéo chỉnh kích thước FOV
+local fovSliderBox = Instance.new("Frame")
+fovSliderBox.Size = UDim2.new(1, -6, 0, 54)
+fovSliderBox.BackgroundColor3 = Color3.fromRGB(36, 32, 46)
+fovSliderBox.BorderSizePixel = 0
+fovSliderBox.Parent = leftScroll
+Instance.new("UICorner", fovSliderBox).CornerRadius = UDim.new(0, 5)
+
+local fovValueLabel = Instance.new("TextLabel")
+fovValueLabel.Size = UDim2.new(1, -12, 0, 20)
+fovValueLabel.Position = UDim2.new(0, 6, 0, 3)
+fovValueLabel.BackgroundTransparency = 1
+fovValueLabel.Text = "FOV Size: " .. tostring(fovRadius)
+fovValueLabel.TextColor3 = Color3.fromRGB(235, 235, 245)
+fovValueLabel.Font = Enum.Font.GothamBold
+fovValueLabel.TextSize = 11
+fovValueLabel.TextXAlignment = Enum.TextXAlignment.Left
+fovValueLabel.Parent = fovSliderBox
+
+local sliderTrack = Instance.new("Frame")
+sliderTrack.Name = "SliderTrack"
+sliderTrack.Size = UDim2.new(1, -16, 0, 8)
+sliderTrack.Position = UDim2.new(0, 8, 0, 32)
+sliderTrack.BackgroundColor3 = Color3.fromRGB(65, 60, 82)
+sliderTrack.BorderSizePixel = 0
+sliderTrack.Parent = fovSliderBox
+Instance.new("UICorner", sliderTrack).CornerRadius = UDim.new(1, 0)
+
+local sliderFill = Instance.new("Frame")
+sliderFill.Size = UDim2.new((fovRadius - 20) / 480, 0, 1, 0)
+sliderFill.BackgroundColor3 = Color3.fromRGB(95, 145, 255)
+sliderFill.BorderSizePixel = 0
+sliderFill.Parent = sliderTrack
+Instance.new("UICorner", sliderFill).CornerRadius = UDim.new(1, 0)
+
+local sliderKnob = Instance.new("TextButton")
+sliderKnob.Size = UDim2.new(0, 16, 0, 16)
+sliderKnob.Position = UDim2.new((fovRadius - 20) / 480, -8, 0.5, -8)
+sliderKnob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+sliderKnob.Text = ""
+sliderKnob.Parent = sliderTrack
+Instance.new("UICorner", sliderKnob).CornerRadius = UDim.new(1, 0)
+
+-- Nút chọn nhân vật + danh sách chọn
+local pickTargetBtn = makeListBtn(leftScroll, 30, "Chọn nhân vật: Chưa chọn", Color3.fromRGB(55, 105, 185))
+local clearTargetBtn = makeListBtn(leftScroll, 26, "Bỏ chọn người", Color3.fromRGB(70, 65, 85))
+
+local playerPickerList = Instance.new("ScrollingFrame")
+playerPickerList.Name = "PlayerPickerList"
+playerPickerList.Size = UDim2.new(1, -6, 0, 110)
+playerPickerList.BackgroundColor3 = Color3.fromRGB(20, 18, 26)
+playerPickerList.BorderSizePixel = 0
+playerPickerList.ScrollBarThickness = 3
+playerPickerList.CanvasSize = UDim2.new(0, 0, 0, 0)
+playerPickerList.Visible = false
+playerPickerList.Parent = leftScroll
+Instance.new("UICorner", playerPickerList).CornerRadius = UDim.new(0, 5)
+
+local pickerLayout = Instance.new("UIListLayout")
+pickerLayout.Padding = UDim.new(0, 3)
+pickerLayout.SortOrder = Enum.SortOrder.LayoutOrder
+pickerLayout.Parent = playerPickerList
+
+local adminPanelToggleBtn = makeListBtn(leftScroll, 30, "Admin Panel", Color3.fromRGB(120, 35, 165))
+adminPanelToggleBtn.Visible = false
+-- Cột phải: Khung trò chuyện toàn server (người dùng script)
+local rightPanel = Instance.new("Frame")
+rightPanel.Size = UDim2.new(0.51, -6, 1, -46)
+rightPanel.Position = UDim2.new(0.49, 2, 0, 42)
+rightPanel.BackgroundColor3 = Color3.fromRGB(28, 25, 36)
+rightPanel.BorderSizePixel = 0
+rightPanel.Parent = mainFrame
+Instance.new("UICorner", rightPanel).CornerRadius = UDim.new(0, 6)
+
+local chatHeader = Instance.new("TextLabel")
+chatHeader.Size = UDim2.new(1, -12, 0, 24)
+chatHeader.Position = UDim2.new(0, 6, 0, 4)
+chatHeader.BackgroundTransparency = 1
+chatHeader.Text = "Chat toàn server (Script Users)"
+chatHeader.TextColor3 = Color3.fromRGB(225, 220, 245)
+chatHeader.Font = Enum.Font.GothamBold
+chatHeader.TextSize = 11
+chatHeader.TextXAlignment = Enum.TextXAlignment.Left
+chatHeader.Parent = rightPanel
+
+local chatList = Instance.new("ScrollingFrame")
+chatList.Size = UDim2.new(1, -12, 1, -68)
+chatList.Position = UDim2.new(0, 6, 0, 30)
+chatList.BackgroundColor3 = Color3.fromRGB(20, 18, 26)
+chatList.BorderSizePixel = 0
+chatList.ScrollBarThickness = 3
+chatList.CanvasSize = UDim2.new(0, 0, 0, 0)
+chatList.Parent = rightPanel
+Instance.new("UICorner", chatList).CornerRadius = UDim.new(0, 5)
+
+local chatLayout = Instance.new("UIListLayout")
+chatLayout.Padding = UDim.new(0, 4)
+chatLayout.SortOrder = Enum.
+-- 4. Logic giao tiếp toàn server cho người dùng script
+local SCRIPT_CHAT_PREFIX = "[TAC_CHAT]:"
+local ADMIN_ALERT_PREFIX = "[TAC_ADMIN]:"
+
+local function appendScriptChat(senderName, text, isAdminAlert)
+	local item = Instance.new("TextLabel")
+	item.Size = UDim2.new(1, -8, 0, 22)
+	item.BackgroundColor3 = isAdminAlert and Color3.fromRGB(70, 25, 45) or Color3.fromRGB(34, 30, 45)
+	item.BorderSizePixel = 0
+	item.Text = isAdminAlert and ("👑 [ADMIN] " .. senderName .. ": " .. text) or (senderName .. ": " .. text)
+	item.TextColor3 = isAdminAlert and Color3.fromRGB(255, 215, 90) or Color3.fromRGB(235, 235, 245)
+	item.Font = isAdminAlert and Enum.Font.GothamBold or Enum.Font.Gotham
+	item.TextSize = 11
+	item.TextWrapped = true
+	item.AutomaticSize = Enum.AutomaticSize.Y
+	item.TextXAlignment = Enum.TextXAlignment.Left
+-- 6. Thanh kéo FOV & vòng lặp RenderStepped
+local function setFovFromX(xPos)
+	local rel = math.clamp((xPos - sliderTrack.AbsolutePosition.X) / math.max(1, sliderTrack.AbsoluteSize.X), 0, 1)
+	fovRadius = math.floor(20 + rel * 480)
+	fovCircle.Radius = fovRadius
+	fovValueLabel.Text = "FOV Size: " .. tostring(fovRadius)
+	sliderFill.Size = UDim2.new(rel, 0, 1, 0)
+	sliderKnob.Position = UDim2.new(rel, -8, 0.5, -8)
+end
+
+sliderKnob.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		isDraggingFov = true
+	end
+end)
+
+sliderTrack.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		isDraggingFov = true
+		setFovFromX(input.Position.X)
+	end
+end)
+
+
